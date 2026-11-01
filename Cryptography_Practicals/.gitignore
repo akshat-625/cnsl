@@ -1,0 +1,21 @@
+# Compiled executables
+rsa_demo
+rsa_benchmark
+custom
+dh
+sha1
+signature
+image
+
+# Generated encryption material (NEVER commit keys)
+*.bin
+*.key
+
+# Example/generated image outputs
+recovered.*
+
+# Editor / OS files
+.vscode/
+.idea/
+*.swp
+.DS_Store
