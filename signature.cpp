@@ -1,107 +1,100 @@
+#include <bits/stdc++.h>
 #include <openssl/evp.h>
-
-#include <iomanip>
-#include <iostream>
-#include <memory>
-#include <string>
-#include <vector>
-
-using PKeyPtr = std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)>;
-using PKeyCtxPtr = std::unique_ptr<EVP_PKEY_CTX, decltype(&EVP_PKEY_CTX_free)>;
-using MdCtxPtr = std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)>;
-
-void printHex(const std::vector<unsigned char> &data) {
-    for (unsigned char byte : data)
-        std::cout << std::hex << std::setw(2) << std::setfill('0') << static_cast<unsigned int>(byte);
-    std::cout << std::dec << '\n';
-}
+using namespace std;
 
 int main() {
-    std::cout << "=== Digital Signature (Ed25519) ===\n";
-    std::string message;
-    std::cout << "Enter message to sign: ";
-    std::getline(std::cin, message);
+    string message;
 
-    PKeyCtxPtr keygenContext(EVP_PKEY_CTX_new_id(EVP_PKEY_ED25519, nullptr), EVP_PKEY_CTX_free);
-    if (!keygenContext || EVP_PKEY_keygen_init(keygenContext.get()) <= 0) {
-        std::cerr << "Ed25519 key-generation initialization failed.\n";
-        return 1;
-    }
-    EVP_PKEY *rawPrivateKey = nullptr;
-    if (EVP_PKEY_keygen(keygenContext.get(), &rawPrivateKey) <= 0 || rawPrivateKey == nullptr) {
-        std::cerr << "Ed25519 key generation failed.\n";
-        return 1;
-    }
-    PKeyPtr privateKey(rawPrivateKey, EVP_PKEY_free);
+    cout << "Enter message to sign: ";
+    getline(cin, message);
 
-    std::size_t publicKeyLength = 0;
-    if (EVP_PKEY_get_raw_public_key(privateKey.get(), nullptr, &publicKeyLength) <= 0) {
-        std::cerr << "Could not determine public-key length.\n";
-        return 1;
-    }
-    std::vector<unsigned char> publicKeyBytes(publicKeyLength);
-    if (EVP_PKEY_get_raw_public_key(privateKey.get(), publicKeyBytes.data(), &publicKeyLength) <= 0) {
-        std::cerr << "Could not extract public key.\n";
-        return 1;
-    }
-    publicKeyBytes.resize(publicKeyLength);
+    // Generate public and private keys.
+    EVP_PKEY_CTX *keyCtx = EVP_PKEY_CTX_new_id(EVP_PKEY_ED25519, nullptr);
+    EVP_PKEY *key = nullptr;
 
-    PKeyPtr publicKey(EVP_PKEY_new_raw_public_key(EVP_PKEY_ED25519, nullptr,
-                                                  publicKeyBytes.data(), publicKeyBytes.size()), EVP_PKEY_free);
-    if (!publicKey) {
-        std::cerr << "Could not create public-key object.\n";
+    if (!keyCtx || EVP_PKEY_keygen_init(keyCtx) <= 0 ||
+        EVP_PKEY_keygen(keyCtx, &key) <= 0) {
+        cout << "Key generation failed.\n";
         return 1;
     }
 
-    MdCtxPtr signContext(EVP_MD_CTX_new(), EVP_MD_CTX_free);
-    if (!signContext || EVP_DigestSignInit(signContext.get(), nullptr, nullptr, nullptr, privateKey.get()) <= 0) {
-        std::cerr << "Signature initialization failed.\n";
+    EVP_PKEY_CTX_free(keyCtx);
+
+    // Create digital signature using private key.
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    size_t sigLen = 0;
+
+    if (!ctx || EVP_DigestSignInit(ctx, nullptr, nullptr, nullptr, key) <= 0 ||
+        EVP_DigestSign(ctx, nullptr, &sigLen,
+                       (unsigned char*)message.data(), message.size()) <= 0) {
+        cout << "Signing setup failed.\n";
         return 1;
     }
 
-    std::size_t signatureLength = 0;
-    if (EVP_DigestSign(signContext.get(), nullptr, &signatureLength,
-                       reinterpret_cast<const unsigned char *>(message.data()), message.size()) <= 0) {
-        std::cerr << "Could not determine signature length.\n";
+    vector<unsigned char> signature(sigLen);
+
+    if (EVP_DigestSign(ctx, signature.data(), &sigLen,
+                       (unsigned char*)message.data(), message.size()) <= 0) {
+        cout << "Signing failed.\n";
         return 1;
     }
-    std::vector<unsigned char> signature(signatureLength);
-    if (EVP_DigestSign(signContext.get(), signature.data(), &signatureLength,
-                       reinterpret_cast<const unsigned char *>(message.data()), message.size()) <= 0) {
-        std::cerr << "Signing failed.\n";
+
+    signature.resize(sigLen);
+    EVP_MD_CTX_free(ctx);
+
+    // Extract public key for signature verification.
+    unsigned char pubBytes[32];
+    size_t pubLen = sizeof(pubBytes);
+
+    if (EVP_PKEY_get_raw_public_key(key, pubBytes, &pubLen) <= 0) {
+        cout << "Public key extraction failed.\n";
         return 1;
     }
-    signature.resize(signatureLength);
 
-    std::cout << "Public key (hex): ";
-    printHex(publicKeyBytes);
-    std::cout << "Signature (hex): ";
-    printHex(signature);
+    EVP_PKEY *pubKey = EVP_PKEY_new_raw_public_key(
+        EVP_PKEY_ED25519, nullptr, pubBytes, pubLen
+    );
 
-    MdCtxPtr verifyContext(EVP_MD_CTX_new(), EVP_MD_CTX_free);
-    if (!verifyContext || EVP_DigestVerifyInit(verifyContext.get(), nullptr, nullptr, nullptr, publicKey.get()) <= 0) {
-        std::cerr << "Signature verification initialization failed.\n";
+    if (!pubKey) {
+        cout << "Public key creation failed.\n";
         return 1;
     }
-    const int originalResult = EVP_DigestVerify(
-        verifyContext.get(), signature.data(), signature.size(),
-        reinterpret_cast<const unsigned char *>(message.data()), message.size());
-    std::cout << "Original message: " << (originalResult == 1 ? "SIGNATURE VERIFIED" : "VERIFICATION FAILED") << '\n';
 
-    std::string modifiedMessage;
-    std::cout << "Enter a message to test (press Enter to modify the original automatically): ";
-    std::getline(std::cin, modifiedMessage);
-    if (modifiedMessage.empty()) modifiedMessage = message + " [modified]";
+    // Verify signature using the public key.
+    ctx = EVP_MD_CTX_new();
 
-    MdCtxPtr modifiedVerifyContext(EVP_MD_CTX_new(), EVP_MD_CTX_free);
-    if (!modifiedVerifyContext || EVP_DigestVerifyInit(modifiedVerifyContext.get(), nullptr, nullptr, nullptr, publicKey.get()) <= 0) {
-        std::cerr << "Modified-message verification initialization failed.\n";
+    if (!ctx || EVP_DigestVerifyInit(ctx, nullptr, nullptr, nullptr, pubKey) <= 0) {
+        cout << "Verification setup failed.\n";
         return 1;
     }
-    const int modifiedResult = EVP_DigestVerify(
-        modifiedVerifyContext.get(), signature.data(), signature.size(),
-        reinterpret_cast<const unsigned char *>(modifiedMessage.data()), modifiedMessage.size());
-    std::cout << "Test message: " << (modifiedResult == 1 ? "SIGNATURE VERIFIED" : "SIGNATURE REJECTED") << '\n';
-    std::cout << "\nNote: This run creates a temporary key pair. A real system must protect private keys and authenticate public-key ownership.\n";
-    return originalResult == 1 ? 0 : 1;
+
+    int ok = EVP_DigestVerify(
+        ctx, signature.data(), signature.size(),
+        (unsigned char*)message.data(), message.size()
+    );
+
+    cout << "Signature verification: "
+         << (ok == 1 ? "Successful" : "Failed") << "\n";
+
+    // Change message to show that verification fails.
+    string changed = message + " changed";
+
+    EVP_MD_CTX_reset(ctx);
+
+    if (EVP_DigestVerifyInit(ctx, nullptr, nullptr, nullptr, pubKey) <= 0) {
+        cout << "Verification setup failed.\n";
+        return 1;
+    }
+
+    int changedOK = EVP_DigestVerify(
+        ctx, signature.data(), signature.size(),
+        (unsigned char*)changed.data(), changed.size()
+    );
+
+    cout << "Modified message: "
+         << (changedOK == 1 ? "Accepted" : "Rejected") << "\n";
+
+    EVP_MD_CTX_free(ctx);
+    EVP_PKEY_free(pubKey);
+    EVP_PKEY_free(key);
 }
